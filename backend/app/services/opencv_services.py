@@ -53,23 +53,19 @@ def process_image(file_path: str) -> str:
             beta= 0
         )
 
-    # ------------------------------------------------
-    # 5. Denoising
-    # ------------------------------------------------
-    rgb= cv2.GaussianBlur(rgb, (3,3), 0)
-
     # -------------------------------------------------
-    # 6. Sharpening 
+    # 5. Contrast & Sharpening for OCR (No Gaussian Blur)
     # -------------------------------------------------
+    # Avoid GaussianBlur as it blurs character edges and degrades OCR accuracy
     kernel = np.array([
         [0, -1, 0],
-        [-1, 5,-1],
+        [-1, 5, -1],
         [0, -1, 0]
     ])
     rgb = cv2.filter2D(rgb, -1, kernel)
 
     # -------------------------------------------------
-    # 7. Ensuring 8-bit  3-channel image
+    # 6. Ensuring 8-bit 3-channel image
     # -------------------------------------------------
     rgb =  np.clip(rgb, 0, 255).astype(np.uint8)
 

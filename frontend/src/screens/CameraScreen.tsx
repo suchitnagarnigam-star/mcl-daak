@@ -148,10 +148,10 @@ export default function CameraScreen({
 
         const stream =
           await navigator.mediaDevices.getUserMedia({
-             video: { 
-              facingMode: {ideal: "environment"},
-              width: {ideal: 1920,},
-              height: {ideal: 1080,},
+            video: { 
+              facingMode: { ideal: "environment" },
+              width: { ideal: 3840, min: 1920 },
+              height: { ideal: 2160, min: 1080 },
             },
             audio: false,
           });
@@ -167,6 +167,13 @@ export default function CameraScreen({
           throw new Error("No camera video track available.");
         }
         cameraTrackRef.current = track;
+
+        // Apply continuous focus mode if supported
+        if (typeof track.applyConstraints === "function") {
+          void track.applyConstraints({
+            advanced: [{ focusMode: "continuous" } as unknown as MediaTrackConstraintSet]
+          }).catch(() => {});
+        }
 
         const imageCaptureWindow = window as WindowWithImageCapture;
 
@@ -713,6 +720,7 @@ export default function CameraScreen({
           ref={fileInputRef}
           type="file"
           accept="image/*"
+          capture="environment"
           multiple
           hidden
           onChange={
