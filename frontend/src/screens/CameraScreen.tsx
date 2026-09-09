@@ -181,13 +181,17 @@ export default function CameraScreen({
           try {
             imageCaptureRef.current =
               new imageCaptureWindow.ImageCapture(track);
+            console.log("[CameraSetup] ImageCapture API initialized successfully for track:", track.label);
           } catch (error) {
             console.warn(
-              "ImageCapture initialization failed.", // canvas fallback will be used instead
+              "[CameraSetup] ImageCapture initialization failed. Canvas fallback will be used.",
               error
             );
             imageCaptureRef.current = null;
           }
+        } else {
+          console.warn("[CameraSetup] window.ImageCapture is NOT supported in this browser. Canvas fallback will be used.");
+          imageCaptureRef.current = null;
         }
 
         if (videoRef.current) {
@@ -269,9 +273,10 @@ export default function CameraScreen({
             blob =
               await imageCaptureRef.current
                 .takePhoto();
+            console.log("[CameraCapture] SUCCESS: Captured high-res still photo via ImageCapture API");
           } catch (error) {
             console.warn(
-              "ImageCapture failed. Falling back to video frame capture.",
+              "[CameraCapture] ImageCapture.takePhoto() failed. Falling back to video frame canvas capture.",
               error
             );
           }
@@ -279,6 +284,7 @@ export default function CameraScreen({
 
 
         if (!blob) {
+          console.log("[CameraCapture] FALLBACK: Capturing frame via Video Canvas");
           const video = videoRef.current;
           const canvas = canvasRef.current;
 
@@ -291,6 +297,8 @@ export default function CameraScreen({
           const width = video.videoWidth || 1920;
           const height = video.videoHeight || 1080;
 
+          console.log(`[CameraCapture] Canvas capture resolution: ${width}x${height}`);
+
           canvas.width = width;
           canvas.height = height;
 
@@ -302,12 +310,14 @@ export default function CameraScreen({
             );
           }
 
-          context.drawImage(video,0,0,width, height);
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
+          context.drawImage(video, 0, 0, width, height);
 
           blob = await new Promise<Blob | null>(
               (resolve) => {
                 canvas.toBlob(
-                  resolve, "image/jpeg", 0.95
+                  resolve, "image/jpeg", 0.98
                 );
               }
             );
