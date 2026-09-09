@@ -30,16 +30,21 @@ DEPARTMENTS = [
     ]
 
 CATEGORIES = [
-    {"category": "Grievance", "description": "Citizen or staff complaints requiring resolution"},
-    {"category": "Service Request", "description": "Requests for a specific municipal service (water, sanitation, lighting etc.)"},
-    {"category": "Development & Infrastructure", "description": "Roads, buildings, sewerage, construction proposals"},
-    {"category": "Financial & Budgetary", "description": "Fund allocation, expense approvals, audit matters"},
-    {"category": "Legal & Compliance", "description": "Court notices, statutory obligations, violations"},
-    {"category": "Administrative & HR", "description": "Transfers, appointments, internal staff matters"},
-    {"category": "Licensing & Permits", "description": "Trade licenses, building approvals, NOCs"},
-    {"category": "Public Health & Sanitation", "description": "Disease control, waste management, sanitation drives"},
-    {"category": "Property & Estate", "description": "Land records, encroachment, property tax matters"},
-    {"category": "General Correspondence", "description": "Anything that doesn't fit above"}
+    {"category": "Public Grievance", "description": "Citizen complaints on water supply, sewerage, sanitation, potholes, streetlights, encroachment, stray animals"},
+    {"category": "Development & Ward Work", "description": "Resident or councillor demands for new roads, parks, community halls, drainage works"},
+    {"category": "RTI Application", "description": "Right to Information requests requiring statutory responses within legal deadlines"},
+    {"category": "Legal & Court Correspondence", "description": "Court orders, litigation notices, contempt petitions, PIL-related communication"},
+    {"category": "Inter-Department Reference", "description": "Letters from PWD, PSPCL, Water Supply & Sanitation, Local Government Department, or other state agencies"},
+    {"category": "Building Plan & Construction", "description": "Building plan approvals, objections, unauthorized construction complaints"},
+    {"category": "Property Tax", "description": "Assessment objections, exemption or rebate requests, tax disputes"},
+    {"category": "VIP & Political Reference", "description": "Letters from MLAs, MPs, or councillors forwarding constituent complaints"},
+    {"category": "Trade & Fire License", "description": "New license applications, renewals, NOC requests for trade or fire safety"},
+    {"category": "Vigilance & Misconduct", "description": "Corruption or misconduct allegations against MCL staff or contractors"},
+    {"category": "Tender & Contractor", "description": "Bid disputes, bill payment follow-ups, work quality complaints"},
+    {"category": "HR & Service Matter", "description": "Employee transfer requests, appointments, service-related applications"},
+    {"category": "Audit Para", "description": "Replies due to CAG or local audit objections"},
+    {"category": "Council Matter", "description": "Resolutions passed, agenda items requiring Commissioner action"},
+    {"category": "General Correspondence", "description": "Anything that does not fit the above categories"}
 ]
 
 
