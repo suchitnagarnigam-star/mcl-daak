@@ -14,6 +14,7 @@ export default function CameraScreen({
   onAccept,
 }: CameraScreenProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<CapturedImage[]>([]);
   const [images, setImages] = useState<CapturedImage[]>([]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -58,6 +59,10 @@ export default function CameraScreen({
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = "";
     }
   }, []);
 
@@ -281,20 +286,42 @@ export default function CameraScreen({
           }
         />
 
+        <input
+          id="upload-file-input"
+          ref={uploadInputRef}
+          type="file"
+          accept="image/*,application/pdf"
+          multiple
+          hidden
+          onChange={
+            handleFileUpload
+          }
+        />
+
 
         {images.length === 0 ? (
-          <>
+          <div style={{ display: "flex", gap: "12px", width: "100%", justifyContent: "center" }}>
             <button
               className="btn btn-primary"
-              data-od-id="upload-image"
+              data-od-id="capture-document"
               type="button"
               onClick={() =>
                 fileInputRef.current?.click()
               }
             >
-              UPLOAD IMAGE
+              CAPTURE DOCUMENT
             </button>
-          </>
+            <button
+              className="btn btn-secondary"
+              data-od-id="upload-document"
+              type="button"
+              onClick={() =>
+                uploadInputRef.current?.click()
+              }
+            >
+              UPLOAD DOCUMENT
+            </button>
+          </div>
         ) : (
 
           <>
@@ -500,7 +527,17 @@ export default function CameraScreen({
                   fileInputRef.current?.click()
                 }
               >
-                Upload Image
+                CAPTURE DOCUMENT
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() =>
+                  uploadInputRef.current?.click()
+                }
+              >
+                UPLOAD DOCUMENT
               </button>
 
 
