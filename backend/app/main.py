@@ -6,18 +6,19 @@ from app.routes.history import router as history_router
 from app.config import SHEETS_WEBHOOK_URL, SHEETS_SECRET
 from app.services.sheets_service import init_sheets
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 import logging
 import asyncio
 import httpx
 import os
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
 load_dotenv()
 
-KEEP_ALIVE_URL = os.getenv("KEEP_ALIVE_URL")
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
-
-logger = logging.getLogger(__name__)
+KEEP_ALIVE_URL = os.getenv("KEEP_ALIVE_URL", "https://mcl-daak.onrender.com/health")
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173")
+CORS_ORIGINS = [origin.strip() for origin in _cors_origins.split(",") if origin.strip()]
 
 if SHEETS_WEBHOOK_URL and SHEETS_SECRET:
     init_sheets(SHEETS_WEBHOOK_URL, SHEETS_SECRET)
@@ -33,7 +34,7 @@ async def keep_alive():
         try:
             async with httpx.AsyncClient() as client:
                 if KEEP_ALIVE_URL:
-                    await client.get(f"{KEEP_ALIVE_URL}/health", timeout=10)
+                    await client.get(KEEP_ALIVE_URL, timeout=10)
                 logger.info("Keep-alive ping sent")
         except Exception as e:
             logger.warning(f"Keep-alive ping failed: {e}")
