@@ -1,4 +1,3 @@
-from anthropic.types import completion_create_params
 from dotenv import load_dotenv
 import os
 try:
