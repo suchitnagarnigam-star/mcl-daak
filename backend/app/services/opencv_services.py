@@ -54,9 +54,21 @@ def process_image(file_path: str) -> str:
         )
 
     # -------------------------------------------------
-    # 5. Contrast & Sharpening for OCR (No Gaussian Blur)
+    # 5. Adaptive Contrast (CLAHE) & Sharpening for OCR
     # -------------------------------------------------
-    # Avoid GaussianBlur as it blurs character edges and degrades OCR accuracy
+    # Convert to LAB color space to sharpen L (lightness) channel without distorting color
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+
+    # Apply CLAHE to lightness channel to make faint/blurry text contrast pop
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l_channel)
+
+    # Merge channels back
+    limg = cv2.merge((cl, a_channel, b_channel))
+    rgb = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+
+    # Mild unsharp mask filter to sharpen character edges
     kernel = np.array([
         [0, -1, 0],
         [-1, 5, -1],
