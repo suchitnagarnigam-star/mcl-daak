@@ -1,14 +1,14 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, status
 import logging
-from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.services.opencv_services import process_image
 from app.services.mistral_ocr_services import mistral_process_ocr
 from app.services.claude_service import process_document
 from app.services.sheets_service import push_to_sheets
-from app.utils.file_utils import save_uploaded_file, delete_file
+from app.utils.file_utils import save_uploaded_file, delete_file, MAX_FILES_PER_REQUEST
 from app.services.supabase_service import insert_data, update_status
+from app.schemas.submission import DocumentSubmission, ImageItem
 
 logger = logging.getLogger(__name__)
 
@@ -22,52 +22,39 @@ router = APIRouter(
 async def upload_images(
     files: list[UploadFile] = File(...)
 ):
-
-    # VALIDATE UPLOAD
+    # 1. VALIDATE REQUEST FILE COUNT
     if not files:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="No images were provided.",
         )
 
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Exceeded maximum limit of {MAX_FILES_PER_REQUEST} files per request.",
+        )
 
-    # CREATE SUBMISSION ID
-    submission_id = str(uuid4())
+    # 2. CREATE ISOLATED DOCUMENT SUBMISSION CONTAINER
+    submission = DocumentSubmission(submission_id=str(uuid4()))
 
     logger.info(
         "Starting document submission %s with %d image(s)",
-        submission_id,
+        submission.submission_id,
         len(files),
     )
 
-    # =========================================================
-    # IMAGE-LEVEL RESULTS
-    #
-    # Each image gets its own:
-    #   - index
-    #   - filename
-    #   - original path
-    #   - processed path
-    #   - OCR markdown/text
-    #
-    # Claude is NOT called here.
-    # =========================================================
-
-    image_items = []
-
-   
-    # PROCESS EACH IMAGE
+    # 3. PROCESS EACH IMAGE IN ORDER
     for index, file in enumerate(files, start=1):
-
         if not file.filename:
             raise HTTPException(
-                status_code=400,
-                detail=f"Image {index} does not have a filename.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image #{index} does not have a valid filename.",
             )
 
         logger.info(
             "[%s] Processing page %d/%d: %s",
-            submission_id,
+            submission.submission_id,
             index,
             len(files),
             file.filename,
@@ -77,57 +64,61 @@ async def upload_images(
         processed_path = None
 
         try:
-            # SAVE ORIGINAL IMAGE
-            saved_path = save_uploaded_file(file)
+            # SAVE ORIGINAL FILE WITH SERVER-GENERATED SAFE FILENAME
+            saved_path = save_uploaded_file(file, submission.submission_id, index)
 
             logger.info(
-                "[%s] Page %d saved: %s",
-                submission_id,
+                "[%s] Page %d saved securely: %s",
+                submission.submission_id,
                 index,
                 saved_path,
             )
 
-            # OPENCV
+            # OPENCV PREPROCESSING
             processed_path = process_image(saved_path)
 
             logger.info(
                 "[%s] Page %d OpenCV processing complete",
-                submission_id,
+                submission.submission_id,
                 index,
             )
 
             # MISTRAL OCR
-            ocr_result = mistral_process_ocr(
-                processed_path
-            )
-
+            ocr_result = mistral_process_ocr(processed_path)
             ocr_text = ocr_result.get("text", "")
 
             if not ocr_text:
                 logger.warning(
                     "[%s] Page %d returned empty OCR text",
-                    submission_id,
+                    submission.submission_id,
                     index,
                 )
 
             logger.info(
                 "[%s] Page %d OCR complete",
-                submission_id,
+                submission.submission_id,
                 index,
             )
 
+            # CLEANUP TEMPORARY FILES FOR THIS PAGE
             delete_file(saved_path)
             delete_file(processed_path)
-            
-            # STORE IMAGE ITEM
-            image_items.append(
-                {
-                    "img_index": index,
-                    "filename": file.filename,
-                    "ocr_md": ocr_text,
-                }
+
+            # STORE ISOLATED IMAGE ITEM IN ORDER
+            item = ImageItem(
+                img_index=index,
+                original_filename=file.filename,
+                saved_path=saved_path,
+                processed_path=processed_path,
+                ocr_md=ocr_text,
             )
+            submission.image_items.append(item)
+
         except HTTPException:
+            if saved_path:
+                delete_file(saved_path)
+            if processed_path:
+                delete_file(processed_path)
             raise
 
         except Exception as exc:
@@ -138,191 +129,171 @@ async def upload_images(
 
             logger.exception(
                 "[%s] Failed while processing page %d: %s",
-                submission_id,
+                submission.submission_id,
                 index,
                 exc,
             )
 
             raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"Failed to process image "
-                    f"{index} ({file.filename})."
-                ),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to process image #{index} ({file.filename}).",
             ) from exc
 
+    # 4. COMBINE OCR TEXT IN STRICT INDEX ORDER
     page_sections = []
-
-    for image in image_items:
-
+    for item in sorted(submission.image_items, key=lambda x: x.img_index):
         page_sections.append(
             "\n".join(
                 [
-                    f"===== BEGIN PAGE {image['img_index']} =====",
+                    f"===== BEGIN PAGE {item.img_index} =====",
                     "",
-                    image["ocr_md"],
+                    item.ocr_md,
                     "",
-                    f"===== END PAGE {image['img_index']} =====",
+                    f"===== END PAGE {item.img_index} =====",
                 ]
             )
         )
 
-    combined_ocr = "\n\n".join(page_sections)
-    if not combined_ocr.strip():
+    submission.combined_ocr = "\n\n".join(page_sections)
+    if not submission.combined_ocr.strip():
         raise HTTPException(
-            status_code=400,
-            detail={"message": "All pages returned empty OCR text.", "status": "failed"}
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "All pages returned empty OCR text.", "status": "failed"},
         )
-        
+
     logger.info(
         "[%s] Combined OCR created from %d page(s)",
-        submission_id,
-        len(image_items),
+        submission.submission_id,
+        len(submission.image_items),
     )
 
+    # 5. STRUCTURED EXTRACTION VIA CLAUDE
     try:
+        submission.llm_result = process_document(submission.combined_ocr)
 
-        llm_result = process_document(
-            combined_ocr
-        )
-        if not llm_result:
+        if not submission.llm_result:
             raise HTTPException(
-                status_code=422,
-                detail={"message": "Failed to extract subject or summary.", "status": "failed"}
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Failed to extract subject or summary.", "status": "failed"},
             )
 
-        if not llm_result.get("subject") or not llm_result.get("summary"):
+        if not submission.llm_result.get("subject") or not submission.llm_result.get("summary"):
             raise HTTPException(
-                status_code=422,
-                detail={"message": "Failed to extract data.", "status": "failed"}
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Failed to extract required fields.", "status": "failed"},
             )
 
         logger.info(
             "[%s] LLM extraction complete",
-            submission_id,
+            submission.submission_id,
         )
 
-    except HTTPException: 
-        raise 
+    except HTTPException:
+        raise
 
     except Exception as exc:
-
         logger.exception(
             "[%s] LLM processing failed: %s",
-            submission_id,
+            submission.submission_id,
             exc,
         )
 
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Failed to extract structured document data.", "status": "failed"},
         ) from exc
 
-
-    # normlaize null fields to N/A "sender_contact", "receiver",
-    fields = ["date", "department", "sender_name","sender_contact", "receiver", "reference_number"]
-
+    # NORMALIZE NULL FIELDS
+    fields = ["date", "department", "sender_name", "sender_contact", "receiver", "reference_number"]
     for field in fields:
-        if not llm_result.get(field):
-            llm_result[field] = "N/A"
+        if not submission.llm_result.get(field):
+            submission.llm_result[field] = "N/A"
 
-    # =========================================================
-    # supabase ENTRY
-    #
-    # We push the final document result only once.
-    # =========================================================
+    # 6. SUPABASE INSERTION
     try:
-        serial_number = insert_data(llm_result)
+        submission.serial_number = insert_data(submission.llm_result)
     except Exception as exc:
         logger.exception(
             "[%s] Failed to insert data into database: %s",
-            submission_id,
+            submission.submission_id,
             exc,
         )
 
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Failed to insert data into database.", "status": "failed"},
         ) from exc
 
-
-    # sheets
-
+    # 7. GOOGLE SHEETS SYNC (INDEPENDENT)
     try:
-
-        # For a single image, keep the original filename.
-        #
-        # For multiple images, use a submission-level name
-        # rather than treating every page as a separate document.
-
         if len(files) == 1:
-            sheets_filename = files[0].filename
+            sheets_filename = submission.image_items[0].original_filename
         else:
-            sheets_filename = (
-                f"submission_{submission_id}"
-            )
+            sheets_filename = f"submission_{submission.submission_id}"
 
         await push_to_sheets(
-            llm_result,
+            submission.llm_result,
             sheets_filename,
-            serial_number
+            submission.serial_number
         )
 
         logger.info(
             "[%s] Google Sheets sync complete",
-            submission_id,
+            submission.submission_id,
         )
 
     except Exception as exc:
-
         logger.exception(
             "[%s] Google Sheets sync failed: %s",
-            submission_id,
+            submission.submission_id,
             exc,
         )
 
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Document processed but Google Sheets sync failed.",
         ) from exc
 
-    # =========================================================
-    # UPDATE STATUS IN DATABASE
-    # =========================================================
+    # 8. UPDATE STATUS IN DATABASE
     try:
-        update_status(serial_number, "complete")
+        update_status(submission.serial_number, "complete")
+        submission.status = "complete"
 
         logger.info(
             "[%s] Status updated to complete",
-            submission_id,
+            submission.submission_id,
         )
 
     except Exception as exc:
         logger.exception(
             "[%s] Failed to update status: %s",
-            submission_id,
+            submission.submission_id,
             exc,
         )
 
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Document processed but status update failed.", "status": "failed"},
         ) from exc
 
-    # =========================================================
-    # FINAL RESPONSE
-    # =========================================================
-
+    # 9. FINAL RESPONSE
     return {
-        "serial_number": serial_number,
+        "serial_number": submission.serial_number,
         "message": "Document processed successfully",
-        "submission_id": submission_id,
-        "status": "complete",
-        "file_count": len(image_items),
+        "submission_id": submission.submission_id,
+        "status": submission.status,
+        "file_count": len(submission.image_items),
         "files": [
-            image["filename"]
-            for image in image_items
+            item.original_filename
+            for item in submission.image_items
         ],
-        "images": image_items,
-        "extracted_data": llm_result,
+        "images": [
+            {
+                "img_index": item.img_index,
+                "filename": item.original_filename,
+                "ocr_md": item.ocr_md,
+            }
+            for item in submission.image_items
+        ],
+        "extracted_data": submission.llm_result,
     }
