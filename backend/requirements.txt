@@ -1,0 +1,21 @@
+fastapi
+uvicorn[standard]
+
+opencv-python-headless
+numpy
+
+python-dotenv
+python-multipart
+mistralai
+
+supabase
+
+anthropic
+google-genai
+httpx
+pytest
+
+# Gmail API – OAuth 2.0
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2

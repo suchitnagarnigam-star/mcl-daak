@@ -1,0 +1,29 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+backend/.env
+
+# Credentials
+credentials/
+service-account.json
+google-credentials.json
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Generated images and outputs
+backend/uploads/
+backend/processed/
+backend/output/
+
+docs/mcl_ui_prompt.md
