@@ -6,15 +6,13 @@
  * syncGrievances()). This script never touches DAAK Records or Grievances
  * Data directly — it only talks to Gmail and to the backend.
  *
- * This file is not deployed by git — Apps Script has no native git
- * integration. It's kept here purely as a version-tracked reference copy.
- * To deploy: paste this file's contents into a new standalone project at
- * https://script.google.com, then follow the setup steps that ship with
- * this feature's PR/README.
- *
  * What it does, once configured and running:
- *   1. Searches the authorized Gmail account's inbox for messages received
- *      after CONFIG.PROCESS_AFTER that don't yet have the "processed" label.
+ *   1. Searches for messages that carry CONFIG.INPUT_LABEL, received after
+ *      CONFIG.PROCESS_AFTER, that don't yet have the "processed" label. The
+ *      mailbox this runs against also receives unrelated mail, so ONLY
+ *      labeled messages are ever touched — in prod, a Gmail filter applies
+ *      INPUT_LABEL automatically to mail forwarded from the known office
+ *      address; in test, you apply it by hand to deliberate test emails.
  *   2. For each one, calls the backend's POST /classify-email/ endpoint.
  *      The backend does ALL the heavy lifting: Claude extraction/
  *      classification, the Supabase insert (with the same atomic serial
@@ -62,12 +60,15 @@ var CONFIG = {
   LABEL_OTHER: 'Non-Grievance',
   LABEL_PROCESSED: 'AutoClassified',
 
-  // Safety valve for testing against a real personal inbox: in 'test' mode,
-  // ONLY messages you've manually applied this label to are ever considered
-  // — never the whole inbox. Apply it yourself to deliberate test emails
-  // only. Ignored in 'prod' mode, where scanning the whole office inbox is
-  // the actual intended behavior.
-  TEST_INPUT_LABEL: 'MCL-Test-Input',
+  // The mailbox this runs against receives OTHER mail too, not just the
+  // forwarded office correspondence — so this script only ever touches
+  // messages carrying INPUT_LABEL, in both environments:
+  //   - In prod: a Gmail FILTER (set up once, outside this script) watches
+  //     for mail from the known forwarding address and applies this label
+  //     automatically. Nothing else in the inbox is ever touched, and no
+  //     one has to manually label anything for day-to-day operation.
+  //   - In test: you apply this label by hand to deliberate test emails.
+  INPUT_LABEL: 'MCL-Grievance-Input',
 
   // Only messages received on/after this date are ever considered.
   // Format: 'YYYY/MM/DD'. Nothing before this date is touched, ever,
@@ -94,15 +95,12 @@ function activeEnv_() {
 function processInbox() {
   var env = activeEnv_();
 
-  // In test mode, only ever touch messages you've explicitly labeled
-  // yourself — never the whole inbox. Prod scans the whole inbox, which is
-  // the actual intended behavior once this is pointed at the real office
-  // mailbox.
-  var scopeClause = (CONFIG.ENV === 'test')
-    ? 'label:' + CONFIG.TEST_INPUT_LABEL
-    : 'in:inbox';
+  // Same gate in both environments: only messages carrying INPUT_LABEL are
+  // ever considered, since this mailbox has other, unrelated mail in it too.
+  var query = 'label:' + CONFIG.INPUT_LABEL +
+    ' -label:' + CONFIG.LABEL_PROCESSED +
+    ' after:' + CONFIG.PROCESS_AFTER;
 
-  var query = scopeClause + ' -label:' + CONFIG.LABEL_PROCESSED + ' after:' + CONFIG.PROCESS_AFTER;
   var threads = GmailApp.search(query, 0, CONFIG.BATCH_SIZE);
 
   Logger.log('processInbox: found ' + threads.length + ' candidate thread(s).');
