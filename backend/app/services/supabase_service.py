@@ -1,7 +1,7 @@
 from app.config import supabase_client
 from datetime import datetime
 
-def insert_data(llm_result):
+def insert_data(llm_result, message_id=None):
     current_year = datetime.now().year
     pattern = f"MCL/{current_year}/%"
 
@@ -13,7 +13,7 @@ def insert_data(llm_result):
     if query.data:
         # here we are only extracting the last part of the serial_number which is the number itself from all the available data
         numbers = [int(item["serial_number"].split('/')[-1]) for item in query.data]
-        max_serial_number = max(numbers)    
+        max_serial_number = max(numbers)
     else:
         max_serial_number = 1000
 
@@ -21,19 +21,23 @@ def insert_data(llm_result):
     new_serial_number = f"MCL/{current_year}/{next_serial_number}"
 
     # after the serial number we here insert the data into the database
-    supabase_client.table("document_submission").insert({
-    "serial_number": new_serial_number,
-    "status": "pending",
-    "date" : llm_result["date"],
-    "subject" : llm_result["subject"],
-    "summary" : llm_result["summary"],
-    "sender_name" : llm_result["sender_name"],
-    "department" : llm_result["department"],
-    "category":llm_result["category"],
-    "sender_contact": llm_result["sender_contact"],
-    "receiver": llm_result["receiver"],
-    "reference_number": llm_result["reference_number"]
-    }).execute()    
+    row = {
+        "serial_number": new_serial_number,
+        "status": "pending",
+        "date" : llm_result["date"],
+        "subject" : llm_result["subject"],
+        "summary" : llm_result["summary"],
+        "sender_name" : llm_result["sender_name"],
+        "department" : llm_result["department"],
+        "category":llm_result["category"],
+        "sender_contact": llm_result["sender_contact"],
+        "receiver": llm_result["receiver"],
+        "reference_number": llm_result["reference_number"],
+    }
+    if message_id is not None:
+        row["message_id"] = message_id
+
+    supabase_client.table("document_submission").insert(row).execute()
 
     return new_serial_number
 
