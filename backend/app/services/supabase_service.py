@@ -42,6 +42,19 @@ def insert_data(llm_result, message_id=None):
     return new_serial_number
 
 
+def find_submission_by_message_id(message_id: str):
+    query = (
+        supabase_client.table("document_submission")
+        .select("*")
+        .eq("message_id", message_id)
+        .limit(1)
+        .execute()
+    )
+    if query.data:
+        return query.data[0]
+    return None
+
+
 def get_recent_documents(limit: int = 10):
     if not supabase_client:
         return []
