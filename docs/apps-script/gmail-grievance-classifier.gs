@@ -62,6 +62,13 @@ var CONFIG = {
   LABEL_OTHER: 'Non-Grievance',
   LABEL_PROCESSED: 'AutoClassified',
 
+  // Safety valve for testing against a real personal inbox: in 'test' mode,
+  // ONLY messages you've manually applied this label to are ever considered
+  // — never the whole inbox. Apply it yourself to deliberate test emails
+  // only. Ignored in 'prod' mode, where scanning the whole office inbox is
+  // the actual intended behavior.
+  TEST_INPUT_LABEL: 'MCL-Test-Input',
+
   // Only messages received on/after this date are ever considered.
   // Format: 'YYYY/MM/DD'. Nothing before this date is touched, ever,
   // regardless of labels — change deliberately if a backfill is wanted.
@@ -86,7 +93,16 @@ function activeEnv_() {
 
 function processInbox() {
   var env = activeEnv_();
-  var query = 'in:inbox -label:' + CONFIG.LABEL_PROCESSED + ' after:' + CONFIG.PROCESS_AFTER;
+
+  // In test mode, only ever touch messages you've explicitly labeled
+  // yourself — never the whole inbox. Prod scans the whole inbox, which is
+  // the actual intended behavior once this is pointed at the real office
+  // mailbox.
+  var scopeClause = (CONFIG.ENV === 'test')
+    ? 'label:' + CONFIG.TEST_INPUT_LABEL
+    : 'in:inbox';
+
+  var query = scopeClause + ' -label:' + CONFIG.LABEL_PROCESSED + ' after:' + CONFIG.PROCESS_AFTER;
   var threads = GmailApp.search(query, 0, CONFIG.BATCH_SIZE);
 
   Logger.log('processInbox: found ' + threads.length + ' candidate thread(s).');
