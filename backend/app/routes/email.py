@@ -100,7 +100,10 @@ async def classify_email_route(payload: EmailIngestRequest):
 
     # Normalize missing fields to N/A, except reference_number which falls
     # back to a Gmail permalink so the record stays traceable to its source.
-    for field in ["date", "department", "sender_name", "sender_contact", "receiver"]:
+    # category is included here too: Claude legitimately returns null when
+    # nothing in the 15-item list fits (e.g. spam/marketing email), and
+    # EmailIngestResponse requires a non-null string.
+    for field in ["date", "department", "category", "sender_name", "sender_contact", "receiver"]:
         if not llm_result.get(field):
             llm_result[field] = "N/A"
 
