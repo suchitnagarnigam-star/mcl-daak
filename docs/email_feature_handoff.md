@@ -1,217 +1,233 @@
-# Email Grievance Classification — Context Handoff (2026-09-21)
+# Email Grievance Classification — Project Context
 
-## What this feature is
-Extends MCL Patr's document pipeline to also classify incoming Gmail
-correspondence — not just scanned physical documents — as Grievance /
-Non-Grievance, giving every email a formal record exactly like a scanned
-document gets, without building a parallel pipeline.
+## Overview
 
-## Current status: built, tested, working — NOT deployed to production
-Everything below runs successfully today, but only against a **local**
-backend (Render usage limit is exhausted; renewal expected "next week" as
-of when this started). Nothing here has been merged to `main`.
+MCL Patr's document pipeline originally handled only physically scanned
+correspondence (OCR → Claude extraction → Supabase → Google Sheets). This
+feature extends the same pipeline to incoming Gmail correspondence:
+emails are classified as Grievance / Non-Grievance and given a formal
+record identical in shape to a scanned document, without building a
+separate pipeline.
 
-## Branch and commits
-- Branch: `feature/aarushi-email-grievance-classification`, pushed to
-  `origin` (https://github.com/suchitnagarnigam-star/mcl-daak.git).
-- 10 commits, each a real logical step (not squashed), no Claude
-  attribution lines (per explicit user request). Latest commit: `6e4dbbf`.
-- `main` is completely untouched.
-- No PR opened yet (not needed until ready to merge — no CI configured
-  on this repo anyway).
+## Architecture
 
-## Architecture (final design)
 ```
-Gmail (commissionermcl@gmail.com forwards to suchitnagarnigam@gmail.com)
-  → Gmail filter auto-applies label "MCL-Grievance-Input" to matching mail
-  → Apps Script (docs/apps-script/gmail-grievance-classifier.gs) polls
-    for that label, calls backend POST /classify-email/
-  → backend/app/routes/email.py:
-      - dedup check via message_id (find_submission_by_message_id)
-      - claude_service.process_document() — REUSED UNMODIFIED from the
-        OCR flow, fed a synthetic "From/Subject/Date + body" text blob
-      - insert_data() — REUSED, generates same MCL/{year}/{n} serial number
-      - push_to_sheets() — REUSED, pushes into DAAK Records
-  → Apps Script labels the Gmail thread Grievance/Non-Grievance +
-    AutoClassified, but ONLY on backend HTTP 200 (full success)
-  → existing, UNMODIFIED syncGrievances() (bound to DAAK Records,
-    external, not in this repo) mirrors grievance-category rows into
-    Grievances Data on its own schedule
+Gmail (office inbox forwards correspondence to a dedicated mailbox)
+  → Gmail filter auto-applies a label to mail from the known forwarding
+    address
+  → Apps Script polls for that label, POSTs each message to the backend
+  → Backend (POST /classify-email/):
+      1. Dedup check by Gmail message_id
+      2. Claude extraction (reused, unmodified, from the OCR flow) on a
+         synthetic "From/Subject/Date + body" text blob
+      3. Insert into Supabase (reused serial-number generation)
+      4. Push to the DAAK Records Sheets webhook (reused)
+  → Apps Script labels the Gmail thread (Grievance/Non-Grievance +
+    Processed), but only once the backend confirms full success
+  → An existing, separate Apps Script (already deployed, bound to the
+    DAAK Records spreadsheet) mirrors grievance-category rows from DAAK
+    Records into a dedicated Grievances sheet on its own schedule
 ```
 
-Key design decisions and why:
-- **Every email gets a DAAK Records row, grievance or not** — explicit
-  user requirement, mirrors how every scanned document is logged
-  regardless of category.
-- **Never write to Grievances Data directly** — `syncGrievances()`
-  (source pasted into `docs/apps-script/sync-grievances.gs` for
-  reference) does a full clear-and-rewrite of that sheet every run, so
-  anything written there directly would be wiped.
-- **`message_id`-based dedup** — new nullable, `UNIQUE` Supabase column
-  (`ALTER TABLE document_submission ADD COLUMN message_id text UNIQUE;`
-  — already run against the real Supabase project). `insert_data()`
-  takes an optional `message_id` param, backward-compatible; OCR flow
-  callers unaffected.
-- **Label-gating (`MCL-Grievance-Input`)** — the destination mailbox
-  receives OTHER mail too, not just forwarded office correspondence, so
-  the Apps Script only ever touches messages carrying this label. In
-  production, a **Gmail filter** (From: `commissionermcl@gmail.com` →
-  apply label) does this automatically — no manual labeling needed
-  day-to-day. This filter has been set up on `suchitnagarnigam@gmail.com`.
-- **Only "Public Grievance" (exact category, case-insensitive substring
-  match on "grievance") reaches Grievances Data** — confirmed via
-  `sync-grievances.gs`'s actual logic. Other categories (e.g. "Building
-  Plan & Construction") can be genuine citizen complaints but won't
-  appear there — a pre-existing quirk of that script, not something we
-  introduced or can fix without touching a script we're not modifying.
+## Key design decisions
 
-## Files changed (all on the feature branch)
-- `backend/app/schemas/email.py` (new) — `EmailIngestRequest`/`Response`
-- `backend/app/routes/email.py` (new) — the `/classify-email/` endpoint
-- `backend/app/services/supabase_service.py` (extended) — `message_id`
-  param on `insert_data()`, new `find_submission_by_message_id()`
-- `backend/app/main.py`, `backend/.env.example` (small wiring changes)
-- `docs/apps-script/gmail-grievance-classifier.gs` (new) — the Gmail
-  poller, NOT deployed by git (pasted manually into script.google.com)
-- `docs/apps-script/sync-grievances.gs` (new) — verbatim reference copy
-  of the user's existing, already-deployed script (not modified by us)
+- **Reuse the document pipeline rather than build a parallel one.**
+  Email text is fed through the same Claude extraction function used for
+  scanned documents (same 15-category list, same 9 extracted fields:
+  date, subject, summary, department, category, sender_name,
+  sender_contact, receiver, reference_number), the same Supabase insert
+  function (same serial-number scheme), and the same Sheets webhook.
+  This avoids duplicating classification logic and keeps email and
+  scanned-document records structurally identical.
+- **Every email gets a formal record, grievance or not** — mirrors how
+  every scanned document is logged regardless of category. Only
+  grievance-category records are additionally mirrored into the
+  dedicated Grievances sheet.
+- **Never write to the Grievances sheet directly.** The existing sync
+  script that populates it does a full clear-and-rewrite of that sheet
+  on every run, sourced only from DAAK Records. Anything written to the
+  Grievances sheet directly would be wiped on the next sync. That sync
+  script also only recognizes a category as a grievance by a substring
+  match on the word "grievance" — categories that are clearly complaints
+  in plain English but don't contain that word (e.g. a construction/
+  encroachment complaint) will not appear there, even though they're
+  correctly recorded in DAAK Records.
+- **Deduplication by Gmail message_id.** A nullable, unique column on
+  the Supabase submissions table lets the backend detect whether a
+  message has already been processed. A message already fully complete
+  returns its stored result idempotently; a message that previously
+  failed partway through (e.g. inserted into Supabase but failed to
+  reach the Sheet) is retried only for the failed step, never
+  re-inserted. This makes retries from the Gmail poller safe by
+  construction — no duplicate records are possible.
+- **Success is all-or-nothing from the Apps Script's point of view.**
+  The Gmail thread is only labeled (and thus considered "processed")
+  once the backend confirms the record was fully persisted (a real HTTP
+  200, which requires both the Supabase insert and the Sheets push to
+  have succeeded). Any failure leaves the thread unlabeled, so it's
+  automatically retried on the next run — safely, thanks to the dedup
+  behavior above.
+- **The destination mailbox also receives unrelated mail** (not just
+  forwarded office correspondence), so the Apps Script only ever
+  processes messages carrying a specific label. In production, a Gmail
+  filter applies that label automatically based on the known forwarding
+  sender's address — no manual labeling is needed for normal operation.
+- **Google credentials stay inside Apps Script, not the backend.** The
+  backend never talks to Gmail, Sheets, or Drive APIs directly — it only
+  calls Claude and Supabase, and pushes to a webhook URL. All Google-side
+  access (reading Gmail, applying labels, the Sheets webhook itself)
+  is handled by Apps Script running under an already-authorized Google
+  account. This avoids adding any new Google service-account or OAuth
+  credentials to the backend.
 
-## Manual setup already done (outside this repo)
-- Supabase: `message_id` column added + `UNIQUE` constraint, with a
-  `document_submission_backup_20260916` snapshot table taken first.
-- Gmail filter on `suchitnagarnigam@gmail.com`: From
-  `commissionermcl@gmail.com` → apply label `MCL-Grievance-Input`.
-- Apps Script project created under `suchitnagarnigam@gmail.com`,
-  pasted with the script above, authorized, **automatic trigger
-  installed** (`installTrigger()` was run — checks every 30 minutes).
-- Local test env: `backend/.env` and `backend/app/.env` (git-ignored,
-  both needed — see gotcha below) filled in with real credentials.
+## Components
 
-## Real production data has already flowed through this
-Multiple real forwarded grievances (water supply, sewage, encroachment,
-etc.) have been successfully classified, inserted into the **real**
-Supabase table and **real** DAAK Records sheet, with correct sender
-extraction even through multi-hop forwarding chains. This is genuinely
-live, not just a test — treat the Supabase table and DAAK Records as
-containing real operational data from here on, not just test rows.
+| Component | Location | Role |
+|---|---|---|
+| Email ingest endpoint | `backend/app/routes/email.py` | Orchestrates dedup check, Claude extraction, Supabase insert, Sheets push |
+| Request/response schema | `backend/app/schemas/email.py` | `EmailIngestRequest`/`EmailIngestResponse` |
+| Supabase persistence | `backend/app/services/supabase_service.py` | `insert_data()` (extended with an optional `message_id`), `find_submission_by_message_id()` |
+| Claude extraction (reused) | `backend/app/services/claude_service.py` | Unmodified — shared with the OCR scanning flow |
+| Sheets webhook push (reused) | `backend/app/services/sheets_service.py` | Unmodified — shared with the OCR scanning flow |
+| Gmail poller | `docs/apps-script/gmail-grievance-classifier.gs` | Not deployed via this repo (Apps Script has no native git integration) — kept here as a version-tracked reference copy; the live version lives in a Google Apps Script project |
+| Existing Sheets sync (reference only) | `docs/apps-script/sync-grievances.gs` | Verbatim copy of a pre-existing, independently-deployed script for compatibility reference — not modified or owned by this feature |
 
-## Currently blocking
-1. **Anthropic API credits exhausted** (as of ~2026-09-19/20) — every
-   classification call fails with `anthropic.BadRequestError: ... credit
-   balance is too low`. Safe failure mode (no data written, no
-   duplicates, threads just stay unlabeled and retry automatically once
-   credits are added) but nothing new gets classified until fixed.
-   Discussed a possible free fallback: `google-genai`/Gemini is already
-   a dependency and partially wired in `config.py` (unused on the main
-   path) and has a real free tier — switching `claude_service.py`'s
-   extraction to Gemini was raised as a *separate future task*, not
-   started.
-2. **Render usage limit exhausted** — the real deployed backend
-   (`mcl-daak.onrender.com`) is down; everything currently runs against
-   a **local** Docker container + ngrok tunnel instead. This is fragile:
-   Docker/the tunnel go down whenever the laptop sleeps/restarts (this
-   has already happened multiple times) and need manual restarting.
-   **As of 2026-09-21, both Docker and the tunnel are DOWN** — nothing
-   will process until they're brought back up (see restart steps below).
-3. **GitHub contribution graph** — commits are correctly authored/linked
-   to `aarushigarg14` (verified via a public commit page — avatar+link
-   present), but still not showing on the profile's contribution
-   calendar as of last check. Left unresolved; user explicitly declined
-   to merge to `main` just to test this. Possibly a propagation delay,
-   possibly a branch-scoping nuance in GitHub's graph algorithm that
-   wasn't fully confirmed either way.
+## Data model
 
-## How to bring the local environment back up
-```bash
-# 1. Open Docker Desktop (from Start menu), wait for it to fully start.
+Supabase submissions table gains one additive, backward-compatible
+column beyond what the OCR flow already used:
 
-# 2. Start the backend container
-cd backend
-docker compose up -d
+- `message_id` (nullable, unique) — the Gmail message ID; `NULL` for
+  scanned-document rows, set for email-sourced rows. Used purely for
+  deduplication.
 
-# 3. Start the tunnel (has consistently reused the same URL so far,
-#    but free ngrok URLs CAN change on restart — check the output)
-"/c/Users/LENOVO/AppData/Local/Microsoft/WinGet/Packages/Ngrok.Ngrok_Microsoft.Winget.Source_8wekyb3d8bbwe/ngrok.exe" http 8000
+No other schema changes. The Sheets payload is unchanged in shape from
+the scanned-document flow — it's the same field set, just sourced from
+an email's text instead of OCR output.
 
-# 4. Verify
-curl http://localhost:8000/health
-curl https://basket-parrot-cleaver.ngrok-free.dev/health   # or new URL if it changed
-```
-If the ngrok URL changed, update `CONFIG.ENVIRONMENTS.test.BACKEND_URL`
-in the Apps Script (under `suchitnagarnigam@gmail.com`) to match, or
-`processInbox` will fail with a 404.
+## Constraints and external dependencies
 
-To stop cleanly later: `docker compose down` (from `backend/`) and
-`taskkill //IM ngrok.exe //F` (Git Bash syntax).
+- **The script that actually writes rows to DAAK Records upon receiving
+  the Sheets webhook is external to this repo and its implementation is
+  unknown** — it's a separate deployment from the Grievances-sync script
+  referenced above. Any change requiring a new column in DAAK Records
+  needs testing against that unknown script first (see Planned next
+  work).
+- **The destination Gmail account is a standard (non-Workspace) personal
+  account.** This limits what's possible for anything involving Drive
+  sharing (see Planned next work) to public "anyone with the link"
+  access — there's no domain-restricted sharing option available.
+- **This is a two-repo setup**: a dev/testing repository and a
+  production-counterpart repository, tracked as separate git remotes.
+  This feature has so far only existed on a feature branch of the
+  production-counterpart repository, not yet merged into its main
+  branch.
 
-## In-progress: next feature being planned (approved to write the plan,
-## NOT approved to start building yet)
-**Email attachments → Grievances Data.** Staff working the Grievances
-Data sheet should be able to click a link to see photos/PDF/video
-attached to the original grievance email. A full plan exists at
-`C:\Users\LENOVO\.claude\plans\the-next-feature-im-sharded-simon.md`.
-Plan mode was exited on 2026-09-21 specifically to save this handoff
-doc — the user explicitly did NOT approve starting implementation at
-that point. Confirm with the user before writing any attachment-feature
-code.
+## Current state
 
-Plan summary (see the plan file for full detail):
-- Apps Script uploads real (non-inline) attachments to one Google Drive
-  folder per email (`DriveApp`, no new credentials), shared
-  "anyone with the link" (confirmed: personal Gmail account, no
-  Workspace domain-restricted sharing option available).
-- Folder link threaded through as a new `attachments_link` field:
-  `EmailIngestRequest` → `llm_result` → `insert_data()` (new nullable
-  Supabase column, same additive pattern as `message_id`) →
-  `push_to_sheets()` (no code change needed, already spreads `**llm_result`).
-- **Genuine open unknown**: whether the external Sheets-webhook Apps
-  Script (behind `SHEETS_WEBHOOK_URL`, never seen its source, separate
-  from `sync-grievances.gs`) auto-creates a new column for an unknown
-  JSON key, or silently drops it. Plan includes a cheap empirical test
-  for this (POST a synthetic payload with an extra key, check if a new
-  column appears in DAAK Records) before committing to that path, with
-  a fallback (append the Drive link into the existing `summary` field)
-  if new fields get dropped.
-- Confirmed decisions: email-attachments only (not OCR scans), all
-  attachment types, one folder link per email (not multiple), exclude
-  inline/embedded images.
+- The email classification pipeline is implemented and has been
+  exercised successfully against real forwarded grievance emails,
+  including through multi-hop forwarding chains (the extraction
+  correctly identifies the original citizen complainant rather than
+  whoever relayed the email).
+- The feature branch is pushed to its remote but not merged. `main` is
+  untouched.
+- The production backend deployment is currently unavailable due to an
+  exhausted hosting usage limit. Development and testing are proceeding
+  against a locally-run backend (via Docker) exposed to the internet
+  through a temporary tunnel, since the Gmail Apps Script needs a public
+  URL to call. This is inherently fragile — the local backend and tunnel
+  go down whenever the host machine sleeps or restarts, and must be
+  manually restarted (`docker compose up -d` in `backend/`, then restart
+  the tunnel process) before Gmail processing will succeed again.
+- The Anthropic API key currently in use has an exhausted credit
+  balance, so classification calls fail until credits are added. This
+  failure mode is safe: failures happen before any data is written, and
+  the Gmail poller's retry-safe design means affected emails are
+  automatically reprocessed once credits are restored, without creating
+  duplicates.
+- An automatic polling trigger (checks for new labeled mail on a fixed
+  interval) has been installed on the Gmail Apps Script project, so
+  processing resumes on its own once the local backend/tunnel and
+  Anthropic credits are both available again — no manual re-triggering
+  needed at that point.
 
-## Known gotchas worth remembering
-- `backend/app/services/mistral_ocr_services.py` calls
-  `load_dotenv()` pointing at `backend/app/.env`, NOT `backend/.env`
-  like everything else — a pre-existing bug, unrelated to this feature,
-  but means **local testing needs a `.env` file in BOTH locations**
-  (they were kept in sync manually; not committed, both git-ignored).
-- Docker Compose's `env_file: .env` mechanism sidesteps that bug
-  entirely (injects real env vars directly, dotenv's misdirected call
-  becomes a harmless no-op) — this is why we run via `docker compose`
-  rather than a bare local `uvicorn` process.
-- `EMAIL_WEBHOOK_SECRET` (local test value, safe to keep using since
-  it's not a real external credential):
-  `e_dTtkk4pT-Dhh-1sXpXdvi75HIdtC9wjJJk6TGmGyo` — already set in
-  `backend/.env`/`backend/app/.env` and pasted into the Apps Script's
-  `CONFIG.BACKEND_SECRET`.
-- The first real test run swept in unrelated personal inbox mail
-  (LinkedIn, Facebook, GitHub notifications) before label-gating was
-  added — all cleaned up from Supabase/DAAK Records afterward. This is
-  why label-gating exists at all; don't remove it without re-adding
-  some other safeguard.
-- A `category: null` from Claude (legitimate when nothing in the
-  15-category list fits) previously crashed the response with a 500
-  *after* Supabase/Sheets had already succeeded — fixed by normalizing
-  `category` to `"N/A"` alongside the other optional fields. Watch for
-  similar "looks like it failed but actually already wrote data" cases
-  if extending this response model further.
+## Known implementation details worth preserving
 
-## Working-style notes for whoever (or whichever session) picks this up
-- Commit at natural checkpoints during implementation, not just in one
-  big commit at the end — the user explicitly asked for this. Keep
-  commit titles short and in plain language (avoid long multi-paragraph
-  commit bodies — the user found those hard to scan).
-- Never add `Co-Authored-By: Claude` attribution lines to commits in
-  this repo — explicitly declined by the user.
-- Treat the Supabase project and DAAK Records/Grievances Data sheets as
-  **live production data** now, not a sandbox — real complaints have
-  already gone through. Be careful with test data going forward (mark
-  it obviously, e.g. `"TEST - DO NOT ACTION"` subjects, and clean up
-  afterward).
+- One of the backend service files used by the (separate) OCR scanning
+  flow loads its local environment file from an unexpected relative
+  path, inconsistent with the rest of the app. This is pre-existing and
+  unrelated to the email feature, but it means local (non-Docker)
+  testing of the full app requires an environment file in two locations
+  to work around it. Running via Docker Compose sidesteps this
+  entirely, since Docker injects environment variables directly rather
+  than relying on that file-loading call — this is why local development
+  for this feature standardized on Docker Compose rather than running
+  the backend directly.
+- Claude can legitimately return a null category when nothing in the
+  fixed category list fits (e.g. a clearly non-grievance, non-official
+  email). The response schema requires a non-null category string, so
+  this must be normalized (e.g. to a placeholder value) alongside the
+  other optional fields before constructing the response — omitting
+  this normalization causes a response validation error *after* the
+  record has already been successfully persisted, which is a
+  particularly confusing failure mode to debug since the caller sees an
+  error despite the data having been saved correctly.
+- The Gmail poller's search must be scoped by label rather than
+  scanning the whole inbox, precisely because the destination mailbox
+  receives unrelated mail. An unscoped search would classify and
+  formally record unrelated personal or promotional email as if it were
+  official correspondence.
+
+## Planned next work (not started)
+
+**Attachments.** Grievance emails often include photos, PDFs, or videos
+that staff working the Grievances sheet currently have no way to access
+without going back to the original email. The intended design:
+
+- The Gmail poller uploads an email's real (non-inline) attachments to a
+  dedicated Google Drive folder — one folder per email — using Apps
+  Script's built-in Drive access (no new credentials needed), shared as
+  "anyone with the link" (the only sharing option available given the
+  non-Workspace account constraint noted above).
+- The resulting folder link is threaded through the backend the same
+  way other optional fields are: added to the request schema, included
+  in the record sent to Supabase (as a new nullable, additive column)
+  and to the Sheets payload.
+- **Open question requiring investigation before implementation**:
+  whether the external DAAK-Records-writing script (see Constraints)
+  automatically accommodates a new field as a new column, or silently
+  drops unrecognized fields. This should be tested empirically (sending
+  a synthetic payload with a new field and observing whether a column
+  appears, checked across more than one of DAAK Records' tabs) before
+  committing to that approach. If new fields are dropped, the fallback
+  is to append the attachment link as a clearly delimited line within
+  the existing summary field, which is already guaranteed to reach both
+  DAAK Records and the Grievances sheet.
+- Confirmed scope: email attachments only (the OCR scanning flow is
+  intentionally out of scope and keeps its current behavior of not
+  retaining original images); all attachment types; one folder link per
+  email rather than one link per attachment; inline/embedded images
+  (e.g. signature logos) excluded.
+- Operational considerations to keep in mind: Drive storage is limited
+  on a standard personal account and shared with that account's other
+  usage, so attachment volume (especially video) should be monitored;
+  and "anyone with the link" sharing means attachment contents are
+  accessible to anyone who obtains a link, which is an inherent
+  limitation of the non-Workspace account rather than something the
+  implementation can avoid.
+
+## Local development setup (no secrets included)
+
+Running this feature locally requires:
+- A backend environment file with real credentials for Claude, Supabase,
+  and the Sheets webhook, plus a shared secret for authenticating the
+  Gmail poller's calls to the backend — kept out of version control.
+- The backend run via Docker Compose (`docker compose up -d` from
+  `backend/`) rather than directly, for the reasons noted above.
+- A public tunnel to the locally-running backend, since Apps Script
+  needs a real URL to call — currently a temporary tunnel is used as a
+  stand-in for the production deployment.
+- An Apps Script project (separate from the existing Grievances-sync
+  script) authorized against the destination Gmail account, configured
+  with the backend's public URL and shared secret.
