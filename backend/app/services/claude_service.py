@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 DEPARTMENTS = [
         {"department": "Accounts & Audit Branch", "description": "Manages municipal funds, financial audits, annual budgets, and expense approvals."},
