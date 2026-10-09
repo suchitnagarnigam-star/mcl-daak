@@ -12,6 +12,8 @@ backend/.env
 credentials/
 service-account.json
 google-credentials.json
+backend/credentials.json
+backend/token.json
 
 # Node
 frontend/node_modules/

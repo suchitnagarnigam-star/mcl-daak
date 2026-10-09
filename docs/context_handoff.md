@@ -1,4 +1,4 @@
-# MCL Patr — Context Handoff (August 19, 2026)
+# MCL Patr — Context Handoff (September 21, 2026)
 
 ## What this is
 MCL Patr is a municipal document digitization system for Municipal Corporation Ludhiana. It extracts structured data from multilingual correspondence in English, Hindi, and Punjabi/Gurmukhi, then stores the result in Supabase and syncs it to Google Sheets.
@@ -189,3 +189,14 @@ VITE_API_URL=https://mcl-ocr.onrender.com
 - Explain what and why
 - Be direct when something is wrong
 - Keep recommendations minimal unless explicitly asked for more
+
+## Recent Features & Integrations (September 21, 2026)
+### Google Drive & Gmail API Integration for Grievance Emails
+- Implemented Google Drive attachment storage for grievance emails.
+- When an email is ingested via the webhook, the system uses the Gmail API to fetch the message by `message_id` and download its attachments.
+- A new Google Drive folder is created named with the generated `serial_number`.
+- Attachments are uploaded to this Drive folder.
+- The `drive_folder_link` is appended to the `llm_result` payload and sent to the Google Sheets webhook.
+- Added `app/services/google_service.py` using `google-api-python-client`.
+- Authentication uses OAuth2 `InstalledAppFlow` with a local `credentials.json` and a `generate_token.py` helper script to generate the long-lived `token.json`.
+- Dependencies added: `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`.

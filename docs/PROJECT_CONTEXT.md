@@ -206,3 +206,15 @@ The application is expected to work on both mobile and web.
 3. Add input validation for upload size and type.
 4. Add Pydantic schemas under `schemas/`.
 5. Keep the docs aligned with the current branch and remote layout.
+
+## Recent Features & Integrations (September 21, 2026)
+
+### Google Drive & Gmail API Integration for Grievance Emails
+- Implemented Google Drive attachment storage for grievance emails.
+- When an email is ingested via the webhook, the system uses the Gmail API to fetch the message by `message_id` and download its attachments.
+- A new Google Drive folder is created named with the generated `serial_number`.
+- Attachments are uploaded to this Drive folder.
+- The `drive_folder_link` is appended to the `llm_result` payload and sent to the Google Sheets webhook.
+- Added `app/services/google_service.py` using `google-api-python-client`.
+- Authentication uses OAuth2 `InstalledAppFlow` with a local `credentials.json` and a `generate_token.py` helper script to generate the long-lived `token.json`.
+- Dependencies added: `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`.

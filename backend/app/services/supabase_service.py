@@ -1,5 +1,5 @@
 from app.config import supabase_client
-from datetime import datetime
+from datetime import datetime, timezone
 
 def insert_data(llm_result, message_id=None):
     current_year = datetime.now().year
@@ -73,4 +73,40 @@ def get_recent_documents(limit: int = 10):
     
 def update_status(serial_number: str, status: str):
     supabase_client.table("document_submission").update({"status": status}).eq("serial_number", serial_number).execute()
+
+def get_last_sync_time() -> int:
+    if not supabase_client: return 0
+    try:
+        query = supabase_client.table("email_sync_state").select("last_successful_sync").eq("id", 1).execute()
+        if query.data and query.data[0].get("last_successful_sync"):
+            iso_str = query.data[0]["last_successful_sync"]
+            dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            return int(dt.timestamp())
+    except Exception as e:
+        print(f"Error fetching last sync time: {e}")
+    return 0
+
+def update_last_sync_time(timestamp_sec: int):
+    if not supabase_client: return
+    try:
+        dt = datetime.fromtimestamp(timestamp_sec, tz=timezone.utc)
+        iso_str = dt.isoformat()
+        supabase_client.table("email_sync_state").upsert({"id": 1, "last_successful_sync": iso_str}).execute()
+    except Exception as e:
+        print(f"Error updating last sync time: {e}")
+
+def is_gmail_processed(message_id: str) -> bool:
+    if not supabase_client: return False
+    try:
+        query = supabase_client.table("processed_gmail_messages").select("message_id").eq("message_id", message_id).limit(1).execute()
+        return len(query.data) > 0
+    except Exception as e:
+        return False
+
+def mark_gmail_processed(message_id: str):
+    if not supabase_client: return
+    try:
+        supabase_client.table("processed_gmail_messages").insert({"message_id": message_id}).execute()
+    except Exception as e:
+        print(f"Error marking gmail processed: {e}")
 

@@ -4,6 +4,7 @@ from app.routes.health import router as health_router
 from app.routes.upload import router as upload_router
 from app.routes.history import router as history_router
 from app.routes.email import router as email_router
+from app.routes.email import sync_gmail_route
 from app.config import SHEETS_WEBHOOK_URL, SHEETS_SECRET
 from app.services.sheets_service import init_sheets
 from contextlib import asynccontextmanager
@@ -40,9 +41,22 @@ async def keep_alive():
         except Exception as e:
             logger.warning(f"Keep-alive ping failed: {e}")
         await asyncio.sleep(600)  # wait 10 minutes before next ping
+
+async def background_email_sync():
+    await asyncio.sleep(10)  # wait 10 seconds after startup before first sync
+    while True:
+        try:
+            logger.info("Starting background email sync...")
+            result = await sync_gmail_route()
+            logger.info(f"Background email sync completed: {result}")
+        except Exception as e:
+            logger.error(f"Background email sync failed: {e}")
+        await asyncio.sleep(21600)  # wait 6 hours before next sync
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(keep_alive())
+    asyncio.create_task(background_email_sync())
     yield
 
 

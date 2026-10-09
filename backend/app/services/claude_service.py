@@ -1,4 +1,4 @@
-from app.config import anthropic_client
+from app.config import anthropic_client, gemini_client
 import json
 import logging
 
@@ -50,9 +50,9 @@ CATEGORIES = [
 
 def process_document(ocr_output: str) -> dict:
 
-    if anthropic_client is None:
-        logger.error("Anthropic client is not configured.")
-        return {"error": "Anthropic client is not configured."}
+    if anthropic_client is None and gemini_client is None:
+        logger.error("No AI clients (Anthropic or Gemini) are configured.")
+        return {"error": "No AI clients configured."}
 
     prompt = f"""You are a language expert fluent in Hindi, Punjabi, and English with deep experience in translating official municipal documents.
 
@@ -101,14 +101,34 @@ def process_document(ocr_output: str) -> dict:
             "reference_number": null
         }}"""
 
-    response = anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    raw = None
+    
+    if anthropic_client:
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw = response.content[0].text
+            logger.info(f"Claude raw response:\n{raw}")
+        except Exception as e:
+            logger.error(f"Anthropic API failed: {e}. Falling back to Gemini.")
 
-    raw = response.content[0].text
-    logger.info(f"Claude raw response:\n{raw}")
+    if raw is None and gemini_client:
+        try:
+            response = gemini_client.models.generate_content(
+                model='gemini-3.5-flash',
+                contents=prompt,
+            )
+            raw = response.text
+            logger.info(f"Gemini raw response:\n{raw}")
+        except Exception as e:
+            logger.error(f"Gemini API failed: {e}.")
+            return {"error": f"AI providers failed. Last error: {e}"}
+            
+    if raw is None:
+        return {"error": "Failed to get a response from any AI provider."}
 
     # strip markdown code fences if present
     cleaned = raw.strip()

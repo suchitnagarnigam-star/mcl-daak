@@ -9,10 +9,12 @@ from mistralai.client import Mistral
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-api_key = os.environ["MISTRAL_API_KEY"]
-client = Mistral(api_key=api_key)
+api_key = os.getenv("MISTRAL_API_KEY")
+client = Mistral(api_key=api_key) if api_key else None
 
 def mistral_process_ocr(file_path: Path)-> dict:    
+    if client is None:
+        raise ValueError("Mistral API key is not configured. Please add MISTRAL_API_KEY to your .env file.")
 
     source = Path(file_path)
     
