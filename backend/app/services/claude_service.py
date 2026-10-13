@@ -1,12 +1,8 @@
-from app.config import anthropic_client, gemini_client
-import anthropic
-from google.genai import errors as genai_errors
+from app.config import anthropic_client
 import json
 import logging
 
 logger = logging.getLogger(__name__)
-
-GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 DEPARTMENTS = [
         {"department": "Accounts & Audit Branch", "description": "Manages municipal funds, financial audits, annual budgets, and expense approvals."},
@@ -52,8 +48,13 @@ CATEGORIES = [
 ]
 
 
-def _build_prompt(ocr_output: str) -> str:
-    return f"""You are a language expert fluent in Hindi, Punjabi, and English with deep experience in translating official municipal documents.
+def process_document(ocr_output: str) -> dict:
+
+    if anthropic_client is None:
+        logger.error("Anthropic client is not configured.")
+        return {"error": "Anthropic client is not configured."}
+
+    prompt = f"""You are a language expert fluent in Hindi, Punjabi, and English with deep experience in translating official municipal documents.
 
         Your job is to translate the document text below into English, preserving the original meaning and context without altering it and there will be conditions when there will be multiple images which will be indicated with page starting and ending lines added with the text.. Then extract the following fields from the translated content.
 
@@ -100,8 +101,15 @@ def _build_prompt(ocr_output: str) -> str:
             "reference_number": null
         }}"""
 
+    response = anthropic_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-def _parse_llm_json(raw: str, source: str) -> dict:
+    raw = response.content[0].text
+    logger.info(f"Claude raw response:\n{raw}")
+
     # strip markdown code fences if present
     cleaned = raw.strip()
     if cleaned.startswith("```"):
@@ -111,62 +119,10 @@ def _parse_llm_json(raw: str, source: str) -> dict:
         cleaned = cleaned.strip()
 
     try:
-        parsed = json.loads(cleaned)
-        logger.info(f"{source} parsed output: {parsed}")
-        return parsed
+        llm_output = json.loads(cleaned)
+        logger.info(f"Claude parsed output: {llm_output}")
     except json.JSONDecodeError as e:
-        logger.error(f"{source} JSON parse error: {e} | Raw: {raw}")
-        return {"error": f"Unable to parse {source} response as JSON.", "raw": raw}
-
-
-def _classify_with_claude(prompt: str) -> dict:
-    response = anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    raw = response.content[0].text
-    logger.info(f"Claude raw response:\n{raw}")
-    return _parse_llm_json(raw, "Claude")
-
-
-def _classify_with_gemini(prompt: str) -> dict:
-    response = gemini_client.models.generate_content(
-        model=GEMINI_FALLBACK_MODEL,
-        contents=prompt,
-    )
-
-    raw = response.text
-    logger.info(f"Gemini raw response:\n{raw}")
-    return _parse_llm_json(raw, "Gemini")
-
-
-def process_document(ocr_output: str) -> dict:
-
-    prompt = _build_prompt(ocr_output)
-
-    if anthropic_client is not None:
-        try:
-            return _classify_with_claude(prompt)
-        except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
-            logger.error(
-                f"Claude classification unavailable ({exc}); falling back to Gemini."
-            )
-    else:
-        logger.error("Anthropic client is not configured; falling back to Gemini.")
-
-    if gemini_client is None:
-        logger.error("Gemini client is not configured; classification failed.")
-        return {"error": "Claude classification failed and Gemini fallback is not configured."}
-
-    try:
-        llm_output = _classify_with_gemini(prompt)
-    except (genai_errors.ClientError, genai_errors.ServerError) as exc:
-        logger.error(f"Gemini fallback also failed ({exc}); classification failed.")
-        return {"error": "Claude classification failed and Gemini fallback also failed."}
-
-    if not llm_output.get("error"):
-        logger.warning("Classification produced by Gemini fallback (Claude unavailable).")
+        logger.error(f"JSON parse error: {e} | Raw: {raw}")
+        llm_output = {"error": "Unable to parse Claude response as JSON.", "raw": raw}
 
     return llm_output
