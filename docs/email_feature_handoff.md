@@ -108,11 +108,12 @@ beyond what the OCR flow already used:
   `NULL` when the email has no attachments and for scanned documents.
   Migration: `ALTER TABLE document_submission ADD COLUMN attachments_link text;`
 
-The Sheets payload is unchanged in shape from the scanned-document
-flow — same field set, just sourced from an email's text instead of OCR
-output. The attachments link deliberately does **not** add a Sheet
-column: it is sent as the existing `filename` value (see Email
-attachments below).
+The Sheets payload is the same field set as the scanned-document flow,
+sourced from an email's text instead of OCR output. Two email-specific
+details: `filename` is the fixed text `Email` (emailed complaints have no
+file name), and the attachments link, when there is one, is added under
+the key `FILE_LOCATION`, which the Sheets-writing script fills into the
+"Attachment Folder" column (see Email attachments below).
 
 ## Constraints and external dependencies
 
@@ -205,14 +206,17 @@ Grievances sheet can now open them from the record.
   mailbox's own Google account — the backend needs no Google credentials,
   no token files, no second Gmail read, and no new dependencies.
 - The backend validates the link (Drive URLs only), stores it on the
-  Supabase record, and sends it to the Sheet as the existing `filename`
-  value. This reuses the `Filename` column that the Sheets script and the
-  Grievances sync already carry end to end, so no column is added and the
-  Sheet layout (including the manually used `STATUS` column) is
-  untouched. It is a plain URL on purpose: the Grievances sync copies
-  with `getValues()`, which flattens formulas and rich-text links.
-  Emails without attachments keep the previous `gmail:<message_id>` value
-  and send exactly the same request as before.
+  Supabase record, and sends it to the Sheet under the key
+  `FILE_LOCATION`. The Sheets-writing script maps that key to the
+  "Attachment Folder" column of DAAK Records, which the Grievances sync
+  then copies on to Grievances Data. No column is added by this feature.
+  The link is a plain URL on purpose: the Grievances sync copies with
+  `getValues()`, which flattens formulas and rich-text links. The
+  `filename` value for emails is the fixed text `Email` (earlier rows may
+  still show `gmail:<message_id>`, an internal ID that is also stored as
+  `message_id` in Supabase). Emails without attachments send no
+  `FILE_LOCATION` key, so their Attachment Folder cell stays empty, and
+  their request to the backend is identical to before.
 - Failure handling: Drive work happens before the backend call. If Drive
   fails, nothing is recorded or labeled and the next run retries,
   reusing the same folder (no duplicates). The Sheet is append-only, so
@@ -237,7 +241,9 @@ Grievances sheet can now open them from the record.
    fail to insert without the column).
 2. Restart the backend so it loads the new code (the container
    bind-mounts the code; no image rebuild is needed).
-3. Paste the updated Apps Script into the live project, then run
+3. Paste the updated Gmail Apps Script into the **Gmail classifier's own
+   project** (the one with the `processInbox` trigger) — never into the
+   project bound to DAAK Records, which holds `syncGrievances()`. Then run
    `processInbox` once by hand and approve the new Drive permission —
    otherwise the already-installed trigger fails authorization.
 4. Test with clearly marked test emails behind the input label: no
@@ -247,8 +253,9 @@ Grievances sheet can now open them from the record.
    `STATUS` column is unchanged. Clean up test rows and folders.
 
 **Assumptions to verify on the first real test**
-- The external Sheets-writing script puts `filename` into the `Filename`
-  column as plain text, as it does for scanned documents.
+- The external Sheets-writing script keeps mapping `FILE_LOCATION` to the
+  "Attachment Folder" column (observed on rows written before this
+  feature existed; the script itself is not in this repo).
 - The URL is clickable in DAAK Records and in Grievances Data after a
   sync.
 - Staff can open the folders (see Sharing).
