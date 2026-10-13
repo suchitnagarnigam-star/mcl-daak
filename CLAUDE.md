@@ -21,5 +21,7 @@ tunnel), see [docs/local_dev_runbook.md](docs/local_dev_runbook.md).
   focused commits, not one large commit at the end.
 - Keep commit messages short and in plain language; avoid long
   multi-paragraph commit bodies.
+- Do not add `Co-Authored-By` or "Generated with Claude Code" attribution
+  lines to commits or pull requests.
 - Never commit real credentials — `backend/.env` and `backend/app/.env`
   are git-ignored and must stay that way.
