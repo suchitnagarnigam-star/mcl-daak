@@ -9,6 +9,7 @@ class EmailIngestRequest(BaseModel):
     subject: Optional[str] = ""
     body: str
     received_at: Optional[str] = None
+    attachments_link: Optional[str] = None
 
 
 class EmailIngestResponse(BaseModel):
