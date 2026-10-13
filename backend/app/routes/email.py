@@ -50,10 +50,20 @@ def _clean_attachments_link(value):
     return None
 
 
-def _sheet_filename(message_id: str, attachments_link):
-    # The Sheet's Filename column carries the Drive link when there are
-    # attachments, otherwise the same gmail:<id> value as before.
-    return attachments_link or f"gmail:{message_id}"
+# Emailed complaints have no file name, so the Sheet's Filename column just
+# says where the record came from (scanned documents keep their real names).
+SHEET_FILENAME = "Email"
+
+# The Sheet's "Attachment Folder" column is filled from this payload key.
+SHEET_ATTACHMENT_KEY = "FILE_LOCATION"
+
+
+def _sheet_data(llm_result: dict, attachments_link):
+    # A copy for the Sheet only. The key is left out entirely when the email
+    # has no attachments, so those rows keep an empty Attachment Folder cell.
+    if not attachments_link:
+        return llm_result
+    return {**llm_result, SHEET_ATTACHMENT_KEY: attachments_link}
 
 
 def _response_from_row(row: dict) -> EmailIngestResponse:
@@ -75,9 +85,8 @@ async def _retry_pending_submission(existing: dict, message_id: str, attachments
     llm_result = {field: existing.get(field) for field in STORED_FIELDS}
     serial_number = existing["serial_number"]
     link = _clean_attachments_link(existing.get("attachments_link")) or attachments_link
-    filename = _sheet_filename(message_id, link)
 
-    push_success = await push_to_sheets(llm_result, filename, serial_number)
+    push_success = await push_to_sheets(_sheet_data(llm_result, link), SHEET_FILENAME, serial_number)
     if not push_success:
         raise HTTPException(
             status_code=500,
@@ -146,8 +155,9 @@ async def classify_email_route(payload: EmailIngestRequest):
         logger.exception("Failed to insert email submission for message %s: %s", payload.message_id, exc)
         raise HTTPException(status_code=500, detail="Failed to insert data into database.") from exc
 
-    filename = _sheet_filename(payload.message_id, attachments_link)
-    push_success = await push_to_sheets(llm_result, filename, serial_number)
+    push_success = await push_to_sheets(
+        _sheet_data(llm_result, attachments_link), SHEET_FILENAME, serial_number
+    )
     if not push_success:
         raise HTTPException(
             status_code=500,

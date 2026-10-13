@@ -49,7 +49,7 @@ def calls(monkeypatch):
         return "MCL/2026/1001"
 
     async def fake_push(llm_result, filename, serial_number):
-        record["push"].append({"filename": filename, "serial_number": serial_number})
+        record["push"].append({"filename": filename, "serial_number": serial_number, "data": llm_result})
         return record.get("push_ok", True)
 
     monkeypatch.setattr(email, "insert_data", fake_insert)
@@ -68,15 +68,28 @@ def test_email_without_attachments_behaves_as_before(calls):
     assert response.serial_number == "MCL/2026/1001"
     assert response.is_grievance is True
     assert calls["insert"] == [{"message_id": "msg1", "attachments_link": None}]
-    assert calls["push"][0]["filename"] == "gmail:msg1"
+    assert calls["push"][0]["filename"] == "Email"
+    assert "FILE_LOCATION" not in calls["push"][0]["data"]
     assert calls["status"] == [("MCL/2026/1001", "complete")]
 
 
-def test_drive_link_is_stored_and_sent_to_the_sheet_as_filename(calls):
+def test_drive_link_is_stored_and_sent_to_the_sheet_attachment_column(calls):
     _run(_payload(attachments_link=DRIVE_LINK))
 
     assert calls["insert"] == [{"message_id": "msg1", "attachments_link": DRIVE_LINK}]
-    assert calls["push"][0]["filename"] == DRIVE_LINK
+    assert calls["push"][0]["data"]["FILE_LOCATION"] == DRIVE_LINK
+    assert calls["push"][0]["filename"] == "Email"
+
+
+def test_the_sheet_copy_does_not_change_what_is_stored(calls):
+    # The link is added to a copy for the Sheet only; the extracted fields
+    # themselves are untouched.
+    _run(_payload(attachments_link=DRIVE_LINK))
+
+    sent = dict(calls["push"][0]["data"])
+    sent.pop("FILE_LOCATION")
+    assert sent["subject"] == "Broken streetlight"
+    assert sent["category"] == "Public Grievance"
 
 
 @pytest.mark.parametrize(
@@ -94,7 +107,8 @@ def test_non_drive_links_are_ignored_and_do_not_block_the_record(calls, bad_link
 
     assert response.serial_number == "MCL/2026/1001"
     assert calls["insert"] == [{"message_id": "msg1", "attachments_link": None}]
-    assert calls["push"][0]["filename"] == "gmail:msg1"
+    assert calls["push"][0]["filename"] == "Email"
+    assert "FILE_LOCATION" not in calls["push"][0]["data"]
 
 
 def test_retry_of_a_pending_record_uses_the_link_and_completes(calls, monkeypatch):
@@ -111,7 +125,10 @@ def test_retry_of_a_pending_record_uses_the_link_and_completes(calls, monkeypatc
 
     assert response.serial_number == "MCL/2026/1005"
     assert calls["insert"] == []
-    assert calls["push"] == [{"filename": DRIVE_LINK, "serial_number": "MCL/2026/1005"}]
+    assert len(calls["push"]) == 1
+    assert calls["push"][0]["serial_number"] == "MCL/2026/1005"
+    assert calls["push"][0]["filename"] == "Email"
+    assert calls["push"][0]["data"]["FILE_LOCATION"] == DRIVE_LINK
     assert calls["status"] == [("MCL/2026/1005", "complete")]
 
 
@@ -127,7 +144,7 @@ def test_retry_prefers_the_link_already_stored_on_the_record(calls, monkeypatch)
 
     _run(_payload(attachments_link=DRIVE_LINK))
 
-    assert calls["push"][0]["filename"] == stored
+    assert calls["push"][0]["data"]["FILE_LOCATION"] == stored
 
 
 def test_already_complete_record_is_returned_without_reprocessing(calls, monkeypatch):
