@@ -3,17 +3,13 @@
 This is MCL Patr (mcl-daak) — a municipal document digitization system.
 `backend/` is a FastAPI service, `frontend/` a React/Vite app.
 
-## Before working on the email classification feature
+## Start here
 
-Read [docs/email_feature_handoff.md](docs/email_feature_handoff.md)
-first. It covers the architecture, key design decisions and their
-rationale, current implementation state, active blockers, and planned
-next work for the Gmail-based grievance classification feature. That
-work currently lives on the `feature/aarushi-email-grievance-classification`
-branch, not yet merged to `main`.
-
-For day-to-day local dev commands (starting/stopping the backend and
-tunnel), see [docs/local_dev_runbook.md](docs/local_dev_runbook.md).
+Read [docs/context_handoff.md](docs/context_handoff.md) first. It is the
+single project context document: architecture, both pipelines (scanned
+documents and the Gmail email channel), data model, the Apps Script
+projects, operating notes and known follow-ups. Keep it updated when the
+project changes instead of adding new context files.
 
 ## General conventions in this repo
 
