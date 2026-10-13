@@ -1,7 +1,7 @@
 from app.config import supabase_client
 from datetime import datetime
 
-def insert_data(llm_result, message_id=None):
+def insert_data(llm_result, message_id=None, attachments_link=None):
     current_year = datetime.now().year
     pattern = f"MCL/{current_year}/%"
 
@@ -36,6 +36,8 @@ def insert_data(llm_result, message_id=None):
     }
     if message_id is not None:
         row["message_id"] = message_id
+    if attachments_link is not None:
+        row["attachments_link"] = attachments_link
 
     supabase_client.table("document_submission").insert(row).execute()
 
