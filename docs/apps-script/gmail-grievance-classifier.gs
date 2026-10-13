@@ -16,7 +16,7 @@
  *   2. If the email has attachments, uploads them to one Google Drive
  *      folder for that email (reused on retry, never duplicated) and sends
  *      the folder link along. The backend puts that link in the Sheet's
- *      Filename column and on the Supabase record. If Drive fails, the
+ *      "Attachment Folder" column and on the Supabase record. If Drive fails, the
  *      email is left unlabeled and retried next run (nothing is recorded
  *      without its files). Emails with no attachments are unchanged.
  *      NOTE: using Drive needs a one-time permission approval — after
@@ -287,6 +287,17 @@ function getAttachmentsRoot_() {
       }
     } catch (err) {
       // The remembered folder was deleted; fall through and create a new one.
+    }
+  }
+
+  // Reuse an existing folder with this name (e.g. one created by an earlier
+  // copy of this script) so there is only ever one root folder.
+  var sameName = DriveApp.getFoldersByName(CONFIG.DRIVE_ROOT_FOLDER_NAME);
+  while (sameName.hasNext()) {
+    var candidate = sameName.next();
+    if (!candidate.isTrashed()) {
+      props.setProperty('ATTACHMENTS_ROOT_FOLDER_ID', candidate.getId());
+      return candidate;
     }
   }
 
