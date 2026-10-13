@@ -44,14 +44,18 @@ Gmail (office inbox forwards correspondence to a dedicated mailbox)
   grievance-category records are additionally mirrored into the
   dedicated Grievances sheet.
 - **Never write to the Grievances sheet directly.** The existing sync
-  script that populates it does a full clear-and-rewrite of that sheet
-  on every run, sourced only from DAAK Records. Anything written to the
-  Grievances sheet directly would be wiped on the next sync. That sync
-  script also only recognizes a category as a grievance by a substring
-  match on the word "grievance" — categories that are clearly complaints
-  in plain English but don't contain that word (e.g. a construction/
-  encroachment complaint) will not appear there, even though they're
-  correctly recorded in DAAK Records.
+  script that populates it rebuilds that sheet from DAAK Records on every
+  run. It remembers each row's `STATUS` by Serial Number and writes it
+  back, so statuses typed by staff survive; anything else written to the
+  Grievances sheet directly is wiped on the next sync. Rows are copied by
+  column **position**, so `STATUS` must stay to the right of every
+  column that DAAK Records has (adding a DAAK Records column can collide
+  with it). That sync script also only recognizes a category as a
+  grievance by a substring match on the word "grievance" (excluding
+  "non-grievance") — categories that are clearly complaints in plain
+  English but don't contain that word (e.g. a construction/encroachment
+  complaint) will not appear there, even though they're correctly
+  recorded in DAAK Records.
 - **Deduplication by Gmail message_id.** A nullable, unique column on
   the Supabase submissions table lets the backend detect whether a
   message has already been processed. A message already fully complete
@@ -90,7 +94,7 @@ Gmail (office inbox forwards correspondence to a dedicated mailbox)
 | LLM extraction (reused) | `backend/app/services/claude_service.py` | Shared with the OCR scanning flow; uses Claude and falls back to Gemini when Claude's API is unavailable |
 | Sheets webhook push (reused) | `backend/app/services/sheets_service.py` | Unmodified — shared with the OCR scanning flow |
 | Gmail poller | `docs/apps-script/gmail-grievance-classifier.gs` | Also uploads attachments to Drive. Not deployed via this repo (Apps Script has no native git integration) — kept here as a version-tracked reference copy; the live version lives in a Google Apps Script project |
-| Existing Sheets sync (reference only) | `docs/apps-script/sync-grievances.gs` | Verbatim copy of a pre-existing, independently-deployed script for compatibility reference — not modified or owned by this feature |
+| Existing Sheets sync (reference only) | `docs/apps-script/sync-grievances.gs` | Copy of the live script bound to the DAAK Records spreadsheet (it also holds only this sync; the webhook that writes rows lives in a different project). Must stay in its own project — pasting another script over it removes `syncGrievances()` |
 
 ## Data model
 
