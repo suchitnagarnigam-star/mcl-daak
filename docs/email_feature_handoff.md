@@ -86,24 +86,29 @@ Gmail (office inbox forwards correspondence to a dedicated mailbox)
 |---|---|---|
 | Email ingest endpoint | `backend/app/routes/email.py` | Orchestrates dedup check, Claude extraction, Supabase insert, Sheets push |
 | Request/response schema | `backend/app/schemas/email.py` | `EmailIngestRequest`/`EmailIngestResponse` |
-| Supabase persistence | `backend/app/services/supabase_service.py` | `insert_data()` (extended with an optional `message_id`), `find_submission_by_message_id()` |
-| Claude extraction (reused) | `backend/app/services/claude_service.py` | Unmodified — shared with the OCR scanning flow |
+| Supabase persistence | `backend/app/services/supabase_service.py` | `insert_data()` (extended with optional `message_id` and `attachments_link`), `find_submission_by_message_id()` |
+| LLM extraction (reused) | `backend/app/services/claude_service.py` | Shared with the OCR scanning flow; uses Claude and falls back to Gemini when Claude's API is unavailable |
 | Sheets webhook push (reused) | `backend/app/services/sheets_service.py` | Unmodified — shared with the OCR scanning flow |
-| Gmail poller | `docs/apps-script/gmail-grievance-classifier.gs` | Not deployed via this repo (Apps Script has no native git integration) — kept here as a version-tracked reference copy; the live version lives in a Google Apps Script project |
+| Gmail poller | `docs/apps-script/gmail-grievance-classifier.gs` | Also uploads attachments to Drive. Not deployed via this repo (Apps Script has no native git integration) — kept here as a version-tracked reference copy; the live version lives in a Google Apps Script project |
 | Existing Sheets sync (reference only) | `docs/apps-script/sync-grievances.gs` | Verbatim copy of a pre-existing, independently-deployed script for compatibility reference — not modified or owned by this feature |
 
 ## Data model
 
-Supabase submissions table gains one additive, backward-compatible
-column beyond what the OCR flow already used:
+Supabase submissions table gains additive, backward-compatible columns
+beyond what the OCR flow already used:
 
 - `message_id` (nullable, unique) — the Gmail message ID; `NULL` for
   scanned-document rows, set for email-sourced rows. Used purely for
   deduplication.
+- `attachments_link` (nullable text) — link to the email's Drive folder;
+  `NULL` when the email has no attachments and for scanned documents.
+  Migration: `ALTER TABLE document_submission ADD COLUMN attachments_link text;`
 
-No other schema changes. The Sheets payload is unchanged in shape from
-the scanned-document flow — it's the same field set, just sourced from
-an email's text instead of OCR output.
+The Sheets payload is unchanged in shape from the scanned-document
+flow — same field set, just sourced from an email's text instead of OCR
+output. The attachments link deliberately does **not** add a Sheet
+column: it is sent as the existing `filename` value (see Email
+attachments below).
 
 ## Constraints and external dependencies
 
@@ -111,12 +116,13 @@ an email's text instead of OCR output.
   the Sheets webhook is external to this repo and its implementation is
   unknown** — it's a separate deployment from the Grievances-sync script
   referenced above. Any change requiring a new column in DAAK Records
-  needs testing against that unknown script first (see Planned next
-  work).
+  needs testing against that unknown script first, which is why the
+  attachments link reuses an existing column (see Email attachments).
 - **The destination Gmail account is a standard (non-Workspace) personal
   account.** This limits what's possible for anything involving Drive
-  sharing (see Planned next work) to public "anyone with the link"
-  access — there's no domain-restricted sharing option available.
+  sharing (see Email attachments) to public "anyone with the link"
+  access, or to a folder shared manually with named staff accounts —
+  there's no domain-restricted sharing option available.
 - **This is a two-repo setup**: a dev/testing repository and a
   production-counterpart repository, tracked as separate git remotes.
   This feature has so far only existed on a feature branch of the
@@ -140,12 +146,14 @@ an email's text instead of OCR output.
   go down whenever the host machine sleeps or restarts, and must be
   manually restarted (`docker compose up -d` in `backend/`, then restart
   the tunnel process) before Gmail processing will succeed again.
-- The Anthropic API key currently in use has an exhausted credit
-  balance, so classification calls fail until credits are added. This
-  failure mode is safe: failures happen before any data is written, and
-  the Gmail poller's retry-safe design means affected emails are
-  automatically reprocessed once credits are restored, without creating
-  duplicates.
+- If Claude's API is unavailable (for example exhausted credits),
+  classification falls back to Gemini. If both fail, the failure is
+  safe: it happens before any data is written, and the Gmail poller's
+  retry-safe design means the email is automatically reprocessed
+  later, without creating duplicates.
+- Email attachment support (Drive upload + link on the record and Sheet)
+  is implemented and unit-tested but **not yet rolled out** — see Email
+  attachments below for the remaining manual steps.
 - An automatic polling trigger (checks for new labeled mail on a fixed
   interval) has been installed on the Gmail Apps Script project, so
   processing resumes on its own once the local backend/tunnel and
@@ -179,43 +187,78 @@ an email's text instead of OCR output.
   formally record unrelated personal or promotional email as if it were
   official correspondence.
 
-## Planned next work (not started)
+## Email attachments (implemented, awaiting rollout)
 
-**Attachments.** Grievance emails often include photos, PDFs, or videos
-that staff working the Grievances sheet currently have no way to access
-without going back to the original email. The intended design:
+Grievance emails often carry photos, PDFs or videos. Staff working the
+Grievances sheet can now open them from the record.
 
-- The Gmail poller uploads an email's real (non-inline) attachments to a
-  dedicated Google Drive folder — one folder per email — using Apps
-  Script's built-in Drive access (no new credentials needed), shared as
-  "anyone with the link" (the only sharing option available given the
-  non-Workspace account constraint noted above).
-- The resulting folder link is threaded through the backend the same
-  way other optional fields are: added to the request schema, included
-  in the record sent to Supabase (as a new nullable, additive column)
-  and to the Sheets payload.
-- **Open question requiring investigation before implementation**:
-  whether the external DAAK-Records-writing script (see Constraints)
-  automatically accommodates a new field as a new column, or silently
-  drops unrecognized fields. This should be tested empirically (sending
-  a synthetic payload with a new field and observing whether a column
-  appears, checked across more than one of DAAK Records' tabs) before
-  committing to that approach. If new fields are dropped, the fallback
-  is to append the attachment link as a clearly delimited line within
-  the existing summary field, which is already guaranteed to reach both
-  DAAK Records and the Grievances sheet.
-- Confirmed scope: email attachments only (the OCR scanning flow is
-  intentionally out of scope and keeps its current behavior of not
-  retaining original images); all attachment types; one folder link per
-  email rather than one link per attachment; inline/embedded images
-  (e.g. signature logos) excluded.
-- Operational considerations to keep in mind: Drive storage is limited
-  on a standard personal account and shared with that account's other
-  usage, so attachment volume (especially video) should be monitored;
-  and "anyone with the link" sharing means attachment contents are
-  accessible to anyone who obtains a link, which is an inherent
-  limitation of the non-Workspace account rather than something the
-  implementation can avoid.
+**How it works**
+- The Gmail Apps Script uploads the email's attachments to one Google
+  Drive folder per email (folder named after the Gmail message ID, files
+  numbered `01_name`, `02_name`, ... so same-named files never collide)
+  and sends the folder link to the backend as `attachments_link`. Apps
+  Script is used because it already holds the email and runs as the
+  mailbox's own Google account — the backend needs no Google credentials,
+  no token files, no second Gmail read, and no new dependencies.
+- The backend validates the link (Drive URLs only), stores it on the
+  Supabase record, and sends it to the Sheet as the existing `filename`
+  value. This reuses the `Filename` column that the Sheets script and the
+  Grievances sync already carry end to end, so no column is added and the
+  Sheet layout (including the manually used `STATUS` column) is
+  untouched. It is a plain URL on purpose: the Grievances sync copies
+  with `getValues()`, which flattens formulas and rich-text links.
+  Emails without attachments keep the previous `gmail:<message_id>` value
+  and send exactly the same request as before.
+- Failure handling: Drive work happens before the backend call. If Drive
+  fails, nothing is recorded or labeled and the next run retries,
+  reusing the same folder (no duplicates). The Sheet is append-only, so
+  holding the email back is preferred to saving it without its files.
+  A script lock prevents overlapping runs; a time budget stops a run
+  before Apps Script's 6-minute limit.
+- Scope decisions: email attachments only (the OCR scanning flow keeps
+  not retaining original images); all attachment types; one folder link
+  per email; only the last message in a thread is processed (existing
+  behaviour). Inline images are kept only when large (default 50 KB) so
+  signature logos are skipped but photos pasted into the body are not;
+  set `INLINE_IMAGE_MIN_BYTES` to -1 to skip all inline images.
+- Sharing: by default each folder is "anyone with the link can view" (the
+  only option on a personal Gmail account), so anyone who obtains a link
+  can open the files. A safer alternative when all staff have Google
+  accounts: create a folder, share it with them, put its ID in
+  `DRIVE_PARENT_FOLDER_ID`, and set `SHARE_ANYONE_WITH_LINK` to `false`
+  (new folders inherit the parent's sharing).
+
+**Rollout steps (in this order)**
+1. Run the Supabase migration above (an email with attachments would
+   fail to insert without the column).
+2. Restart the backend so it loads the new code (the container
+   bind-mounts the code; no image rebuild is needed).
+3. Paste the updated Apps Script into the live project, then run
+   `processInbox` once by hand and approve the new Drive permission —
+   otherwise the already-installed trigger fails authorization.
+4. Test with clearly marked test emails behind the input label: no
+   attachment; one photo; two same-named files; a PDF; a small video;
+   re-run the same email (no second folder or row); check the cell in
+   DAAK Records and in Grievances Data after a sync, and that the
+   `STATUS` column is unchanged. Clean up test rows and folders.
+
+**Assumptions to verify on the first real test**
+- The external Sheets-writing script puts `filename` into the `Filename`
+  column as plain text, as it does for scanned documents.
+- The URL is clickable in DAAK Records and in Grievances Data after a
+  sync.
+- Staff can open the folders (see Sharing).
+- A manual "Forward" keeps the original attachments as normal
+  attachments.
+
+**Known limitations**
+- Emails processed before this feature have no link, and the append-only
+  Sheet cannot be updated afterwards.
+- Drive storage on a personal account is 15 GB shared with that
+  account's Gmail and Photos; videos can fill it (the run log reports
+  usage).
+- OCR of attached scanned letters through the existing OCR flow is not
+  done; it would need the file bytes on the backend.
 
 ## Local development setup (no secrets included)
 
