@@ -35,6 +35,27 @@ def _is_grievance(category: str) -> bool:
     return "grievance" in (category or "").lower()
 
 
+DRIVE_LINK_PREFIX = "https://drive.google.com/"
+
+
+def _clean_attachments_link(value):
+    # Only trust Drive links. Anything else is dropped (with a warning) so a
+    # bad value can never block a grievance or reach the Sheet as a formula.
+    if not value:
+        return None
+    link = str(value).strip()
+    if link.startswith(DRIVE_LINK_PREFIX) and not any(c.isspace() for c in link):
+        return link
+    logger.warning("Ignoring attachments_link that is not a Drive link.")
+    return None
+
+
+def _sheet_filename(message_id: str, attachments_link):
+    # The Sheet's Filename column carries the Drive link when there are
+    # attachments, otherwise the same gmail:<id> value as before.
+    return attachments_link or f"gmail:{message_id}"
+
+
 def _response_from_row(row: dict) -> EmailIngestResponse:
     return EmailIngestResponse(
         category=row.get("category") or "N/A",
@@ -50,10 +71,11 @@ def _is_duplicate_key_error(exc: Exception) -> bool:
     return "duplicate key" in message or "23505" in message or "unique constraint" in message
 
 
-async def _retry_pending_submission(existing: dict, message_id: str) -> EmailIngestResponse:
+async def _retry_pending_submission(existing: dict, message_id: str, attachments_link=None) -> EmailIngestResponse:
     llm_result = {field: existing.get(field) for field in STORED_FIELDS}
     serial_number = existing["serial_number"]
-    filename = f"gmail:{message_id}"
+    link = _clean_attachments_link(existing.get("attachments_link")) or attachments_link
+    filename = _sheet_filename(message_id, link)
 
     push_success = await push_to_sheets(llm_result, filename, serial_number)
     if not push_success:
@@ -69,12 +91,14 @@ async def _retry_pending_submission(existing: dict, message_id: str) -> EmailIng
 @router.post("/", response_model=EmailIngestResponse, dependencies=[Depends(verify_email_secret)])
 async def classify_email_route(payload: EmailIngestRequest):
 
+    attachments_link = _clean_attachments_link(payload.attachments_link)
+
     # Deduplication: never reprocess or re-insert the same Gmail message.
     existing = find_submission_by_message_id(payload.message_id)
     if existing:
         if existing.get("status") == "complete":
             return _response_from_row(existing)
-        return await _retry_pending_submission(existing, payload.message_id)
+        return await _retry_pending_submission(existing, payload.message_id, attachments_link)
 
     combined_text = (
         f"From: {payload.sender}\n"
@@ -111,18 +135,18 @@ async def classify_email_route(payload: EmailIngestRequest):
         llm_result["reference_number"] = f"https://mail.google.com/mail/u/0/#all/{payload.thread_id}"
 
     try:
-        serial_number = insert_data(llm_result, payload.message_id)
+        serial_number = insert_data(llm_result, payload.message_id, attachments_link)
     except Exception as exc:
         if _is_duplicate_key_error(exc):
             existing = find_submission_by_message_id(payload.message_id)
             if existing:
                 if existing.get("status") == "complete":
                     return _response_from_row(existing)
-                return await _retry_pending_submission(existing, payload.message_id)
+                return await _retry_pending_submission(existing, payload.message_id, attachments_link)
         logger.exception("Failed to insert email submission for message %s: %s", payload.message_id, exc)
         raise HTTPException(status_code=500, detail="Failed to insert data into database.") from exc
 
-    filename = f"gmail:{payload.message_id}"
+    filename = _sheet_filename(payload.message_id, attachments_link)
     push_success = await push_to_sheets(llm_result, filename, serial_number)
     if not push_success:
         raise HTTPException(
